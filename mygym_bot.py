@@ -1,10 +1,12 @@
 import telebot
 import json
 import os
-from flask import Flask, request
+from flask import Flask
 from threading import Thread
+import time
+import random
 
-# Загружаем токен из переменных окружения
+# ---------- Настройка бота ----------
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
@@ -28,7 +30,7 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Вспомогательные клавиатуры ----------
+# ---------- Клавиатуры ----------
 def cancel_keyboard():
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("↩️ Назад", "❌ Отмена")
@@ -41,107 +43,42 @@ def days_keyboard():
     kb.row("❌ Отмена")
     return kb
 
+# ---------- Таймер отдыха ----------
+def rest_timer(chat_id):
+    rest_time = random.randint(90, 180)  # 1.5-3 минуты
+    bot.send_message(chat_id, f"⏱ Отдых {rest_time//60} мин {rest_time%60} сек. Расслабься!")
+    time.sleep(rest_time)
+    bot.send_message(chat_id, "🏋️ Приступай к следующему упражнению!")
+
 # ---------- Команды ----------
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "🏋️ Привет! Я твой фитнес-бот.\n\n"
-                                      "Выбери день недели, чтобы добавить упражнение.",
+    bot.send_message(message.chat.id, "🏋️ Привет! Я твой фитнес-бот.\nВыбери день недели для добавления упражнения.",
                      reply_markup=days_keyboard())
 
-@bot.message_handler(func=lambda m: m.text and m.text.lower() in data.keys())
-def choose_day(message):
-    day = message.text.lower()
-    bot.send_message(message.chat.id, f"📆 Добавляем упражнение на {day}. Введи название упражнения:",
-                     reply_markup=cancel_keyboard())
-    bot.register_next_step_handler(message, lambda msg: get_exercise_name(msg, day))
-
-def get_exercise_name(message, day):
-    if message.text.lower() == "❌ отмена":
-        return start(message)
-    elif message.text.lower() == "↩️ назад":
-        return start(message)
-
-    name = message.text
-    bot.send_message(message.chat.id, "💪 Это силовая тренировка? (да/нет)",
-                     reply_markup=cancel_keyboard())
-    bot.register_next_step_handler(message, lambda msg: get_exercise_type(msg, day, name))
-
-def get_exercise_type(message, day, name):
-    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
-        return choose_day(message)
-
-    is_power = message.text.lower() in ["да", "д", "yes", "y"]
-    bot.send_message(message.chat.id, "📹 Пришли видео упражнения (или напиши 'нет', чтобы пропустить):",
-                     reply_markup=cancel_keyboard())
-    bot.register_next_step_handler(message, lambda msg: get_video(msg, day, name, is_power))
-
-def get_video(message, day, name, is_power):
-    if message.text.lower() == "❌ отмена":
-        return start(message)
-    elif message.text.lower() == "↩️ назад":
-        return get_exercise_name(message, day)
-
-    video_id = None
-    if message.content_type == "video":
-        video_id = message.video.file_id
-    elif message.text.lower() == "нет":
-        video_id = None
-
-    new_ex = {
-        "название": name,
-        "тип": "силовое" if is_power else "кардио",
-        "video_id": video_id,
-        "подходы": [],
-        "вес": []
+@bot.message_handler(commands=['test'])
+def test_stats(message):
+    # Тестовая статистика для демонстрации
+    test_data = {
+        "понедельник": [{"название": "Тест приседания", "тип": "силовое", "подходы": [10,12], "вес": [50,55], "video_id": None}],
+        "вторник": [],
+        "среда": [],
+        "четверг": [],
+        "пятница": [],
+        "суббота": [],
+        "воскресенье": []
     }
+    msg = "📊 Тестовая статистика:\n"
+    for day, exs in test_data.items():
+        msg += f"\n📅 {day.capitalize()}:\n"
+        if not exs:
+            msg += "  — Нет упражнений\n"
+            continue
+        for e in exs:
+            msg += f"  🔸 {e['название']} ({e['тип']})\n"
+            msg += f"     Подходы: {e['подходы']}  Вес: {e['вес']}\n"
+    bot.send_message(message.chat.id, msg)
 
-    data[day].append(new_ex)
-    save_data(data)
-
-    if is_power:
-        bot.send_message(message.chat.id, f"💪 Сколько подходов сделал в '{name}'?",
-                         reply_markup=cancel_keyboard())
-        bot.register_next_step_handler(message, lambda msg: get_sets(msg, day, name))
-    else:
-        bot.send_message(message.chat.id, f"🏃 Упражнение '{name}' добавлено как кардио!",
-                         reply_markup=days_keyboard())
-
-def get_sets(message, day, name):
-    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
-        return get_video(message, day, name, True)
-
-    try:
-        sets = int(message.text)
-    except ValueError:
-        bot.send_message(message.chat.id, "Введите число.")
-        return bot.register_next_step_handler(message, lambda msg: get_sets(msg, day, name))
-
-    last = data[day][-1]
-    last["подходы"].append(sets)
-    save_data(data)
-
-    bot.send_message(message.chat.id, "⚖️ Сколько кг было на последнем подходе?",
-                     reply_markup=cancel_keyboard())
-    bot.register_next_step_handler(message, lambda msg: get_weight(msg, day, name))
-
-def get_weight(message, day, name):
-    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
-        return get_sets(message, day, name)
-
-    try:
-        weight = float(message.text)
-    except ValueError:
-        bot.send_message(message.chat.id, "Введите число.")
-        return bot.register_next_step_handler(message, lambda msg: get_weight(msg, day, name))
-
-    last = data[day][-1]
-    last["вес"].append(weight)
-    save_data(data)
-
-    bot.send_message(message.chat.id, "✅ Записано! Можно добавить новое упражнение.",
-                     reply_markup=days_keyboard())
-
-# ---------- Статистика ----------
 @bot.message_handler(commands=['stats'])
 def stats(message):
     msg = "📊 Твоя статистика:\n"
@@ -155,7 +92,99 @@ def stats(message):
             msg += f"     Подходы: {e['подходы']}  Вес: {e['вес']}\n"
     bot.send_message(message.chat.id, msg)
 
-# ---------- Flask сервер для Render ----------
+@bot.message_handler(func=lambda m: m.text and m.text.lower() in data.keys())
+def choose_day(message):
+    day = message.text.lower()
+    bot.send_message(message.chat.id, f"📆 Добавляем упражнение на {day}. Введи название упражнения:",
+                     reply_markup=cancel_keyboard())
+    bot.register_next_step_handler(message, lambda msg: get_exercise_name(msg, day))
+
+def get_exercise_name(message, day):
+    if not message.text:
+        bot.send_message(message.chat.id, "⚠️ Пожалуйста, введите текст.")
+        return bot.register_next_step_handler(message, lambda msg: get_exercise_name(msg, day))
+    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
+        return start(message)
+
+    name = message.text
+    bot.send_message(message.chat.id, "💪 Это силовая тренировка? (да/нет)", reply_markup=cancel_keyboard())
+    bot.register_next_step_handler(message, lambda msg: get_exercise_type(msg, day, name))
+
+def get_exercise_type(message, day, name):
+    if not message.text:
+        return bot.register_next_step_handler(message, lambda msg: get_exercise_type(msg, day, name))
+    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
+        return choose_day(message)
+
+    is_power = message.text.lower() in ["да", "д", "yes", "y"]
+    bot.send_message(message.chat.id, "📹 Пришли видео упражнения (или напиши 'нет'):", reply_markup=cancel_keyboard())
+    bot.register_next_step_handler(message, lambda msg: get_video(msg, day, name, is_power))
+
+def get_video(message, day, name, is_power):
+    video_id = None
+    if message.content_type == "video":
+        video_id = message.video.file_id
+    elif message.text and message.text.lower() == "нет":
+        video_id = None
+    elif message.text.lower() in ["❌ отмена", "↩️ назад"]:
+        return get_exercise_type(message, day, name)
+
+    new_ex = {
+        "название": name,
+        "тип": "силовое" if is_power else "кардио",
+        "video_id": video_id,
+        "подходы": [],
+        "вес": []
+    }
+    data[day].append(new_ex)
+    save_data(data)
+
+    if is_power:
+        bot.send_message(message.chat.id, f"💪 Сколько подходов сделал в '{name}'?", reply_markup=cancel_keyboard())
+        bot.register_next_step_handler(message, lambda msg: get_sets(msg, day, name))
+    else:
+        bot.send_message(message.chat.id, f"🏃 Упражнение '{name}' добавлено как кардио!", reply_markup=days_keyboard())
+        Thread(target=rest_timer, args=(message.chat.id,)).start()
+
+def get_sets(message, day, name):
+    if not message.text:
+        return bot.register_next_step_handler(message, lambda msg: get_sets(msg, day, name))
+    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
+        return get_exercise_name(message, day)
+
+    try:
+        sets = int(message.text)
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠️ Введите число.")
+        return bot.register_next_step_handler(message, lambda msg: get_sets(msg, day, name))
+
+    last = data[day][-1]
+    last["подходы"].append(sets)
+    save_data(data)
+
+    bot.send_message(message.chat.id, "⚖️ Сколько кг было на последнем подходе?", reply_markup=cancel_keyboard())
+    bot.register_next_step_handler(message, lambda msg: get_weight(msg, day, name))
+
+def get_weight(message, day, name):
+    if not message.text:
+        return bot.register_next_step_handler(message, lambda msg: get_weight(msg, day, name))
+    if message.text.lower() in ["❌ отмена", "↩️ назад"]:
+        return get_sets(message, day, name)
+
+    try:
+        weight = float(message.text)
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠️ Введите число.")
+        return bot.register_next_step_handler(message, lambda msg: get_weight(msg, day, name))
+
+    last = data[day][-1]
+    last["вес"].append(weight)
+    save_data(data)
+
+    bot.send_message(message.chat.id, "✅ Записано! Можно добавить новое упражнение.", reply_markup=days_keyboard())
+    Thread(target=rest_timer, args=(message.chat.id,)).start()
+
+# ---------- Flask для Render ----------
 @app.route('/')
 def home():
     return "Bot is running"
@@ -165,7 +194,7 @@ def run_flask():
 
 # ---------- Запуск ----------
 def run_bot():
-    bot.polling(none_stop=True, interval=0, timeout=20)
+    bot.polling(none_stop=True)
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
